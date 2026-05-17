@@ -1,0 +1,650 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta http-equiv="refresh" content="{{ refresh_minutes * 60 }}">
+  <title>Portfolio Monitor</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <style>
+    body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; }
+    .pos { color: #047857; }
+    .neg { color: #b91c1c; }
+    .neutral { color: #6b7280; }
+    .sticky-th { position: sticky; top: 0; background: #1F4E78; color: white; z-index: 10; }
+    .badge { display: inline-block; padding: 2px 8px; border-radius: 9999px; font-size: 11px; font-weight: 600; }
+    .badge-info { background: #dbeafe; color: #1e40af; }
+    .badge-warn { background: #fef3c7; color: #92400e; }
+    .badge-crit { background: #fee2e2; color: #991b1b; }
+    /* Tabs */
+    .tab-link { color: #64748b; border-color: transparent; }
+    .tab-link:hover { color: #1F4E78; }
+    .tab-link.is-active { color: #1F4E78; border-color: #1F4E78; }
+    [data-tab-panel] { display: none; }
+    [data-tab-panel].is-active { display: block; }
+  </style>
+</head>
+<body class="bg-slate-50 text-slate-800">
+
+<header class="bg-[#1F4E78] text-white">
+  <div class="max-w-7xl mx-auto px-6 py-5 flex items-center justify-between">
+    <div>
+      <h1 class="text-2xl font-semibold">Portfolio Monitor</h1>
+      <p class="text-sm opacity-80">Refreshes every {{ refresh_minutes }} min · Last server time: {{ now }}</p>
+    </div>
+    <div class="text-right">
+      <div class="text-3xl font-semibold">{{ total_value | usd }}</div>
+      <div class="text-sm opacity-80">
+        P&amp;L: <span class="{% if total_pnl >= 0 %}text-emerald-300{% else %}text-red-300{% endif %}">
+          {{ total_pnl | usd }} ({{ total_pnl_pct | pct }})
+        </span>
+      </div>
+    </div>
+  </div>
+</header>
+
+<main class="max-w-7xl mx-auto px-6 py-6">
+
+  <!-- Tab navigation -->
+  <nav class="border-b border-slate-200 mb-6">
+    <div class="flex gap-1">
+      <a href="?tab=holdings" data-tab="holdings"
+         class="tab-link px-4 py-3 text-sm font-medium border-b-2 -mb-px transition">
+        Holdings &amp; Macro
+      </a>
+      <a href="?tab=tax" data-tab="tax"
+         class="tab-link px-4 py-3 text-sm font-medium border-b-2 -mb-px transition">
+        Tax &amp; Schedule FA
+      </a>
+    </div>
+  </nav>
+
+  <!-- ====================== HOLDINGS PANEL ====================== -->
+  <div data-tab-panel="holdings" class="space-y-6">
+
+  <!-- Top-line metrics -->
+  <section class="grid grid-cols-2 md:grid-cols-4 gap-4">
+    <div class="bg-white rounded-lg shadow-sm p-4">
+      <div class="text-xs uppercase text-slate-500 font-medium">Total USD</div>
+      <div class="text-xl font-semibold mt-1">{{ total_value | usd }}</div>
+    </div>
+    <div class="bg-white rounded-lg shadow-sm p-4">
+      <div class="text-xs uppercase text-slate-500 font-medium">Total INR</div>
+      <div class="text-xl font-semibold mt-1">
+        {% if total_inr %}₹{{ "{:,.0f}".format(total_inr) }}{% else %}—{% endif %}
+      </div>
+    </div>
+    <div class="bg-white rounded-lg shadow-sm p-4">
+      <div class="text-xs uppercase text-slate-500 font-medium">Gold-oz equivalent</div>
+      <div class="text-xl font-semibold mt-1">
+        {% if total_gold_oz %}{{ "{:,.2f}".format(total_gold_oz) }} oz{% else %}—{% endif %}
+      </div>
+    </div>
+    <div class="bg-white rounded-lg shadow-sm p-4">
+      <div class="text-xs uppercase text-slate-500 font-medium">Cost Basis</div>
+      <div class="text-xl font-semibold mt-1">{{ total_cost | usd }}</div>
+    </div>
+  </section>
+
+  <!-- Allocation by leg -->
+  <section class="bg-white rounded-lg shadow-sm p-4">
+    <h2 class="text-sm uppercase text-slate-500 font-medium mb-3">
+      {% if leg_totals %}Allocation by Leg{% else %}Allocation by Leg (cost basis — no live prices yet){% endif %}
+    </h2>
+    <div class="space-y-2">
+      {% set _src_totals = leg_totals if leg_totals else leg_costs %}
+      {% set _src_pcts = leg_pcts if leg_totals else leg_cost_pcts %}
+      {% for leg, val in _src_totals.items() %}
+      <div class="flex items-center gap-3">
+        <div class="w-32 text-sm">{{ leg }}</div>
+        <div class="flex-1 bg-slate-100 rounded h-5 overflow-hidden">
+          <div class="bg-[#1F4E78] h-full" style="width: {{ _src_pcts[leg] }}%"></div>
+        </div>
+        <div class="w-32 text-sm text-right">{{ val | usd }} ({{ "%.1f"|format(_src_pcts[leg]) }}%)</div>
+      </div>
+      {% endfor %}
+    </div>
+  </section>
+
+  <!-- Macro watch -->
+  <section class="bg-white rounded-lg shadow-sm p-4">
+    <h2 class="text-sm uppercase text-slate-500 font-medium mb-3">Macro Watch</h2>
+    <div class="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3">
+      {% for m in macro_rows %}
+      <div class="border border-slate-200 rounded p-3">
+        <div class="text-xs text-slate-500">{{ m.name }}</div>
+        <div class="text-lg font-semibold mt-1">
+          {% if m.price %}{{ "%.2f"|format(m.price) }}{% else %}—{% endif %}
+        </div>
+        <div class="text-xs mt-1
+          {% if m.chg_24h is none %}neutral
+          {% elif m.chg_24h >= 0 %}pos{% else %}neg{% endif %}">
+          24h: {{ m.chg_24h | pct }}
+        </div>
+        {% if m.key_levels %}
+          <div class="text-xs text-slate-400 mt-1">
+            {% if m.key_levels.break_above %}↑{{ m.key_levels.break_above }}{% endif %}
+            {% if m.key_levels.break_below %} · ↓{{ m.key_levels.break_below }}{% endif %}
+          </div>
+        {% endif %}
+      </div>
+      {% endfor %}
+    </div>
+  </section>
+
+  <!-- Holdings -->
+  <section class="bg-white rounded-lg shadow-sm overflow-hidden">
+    <div class="px-4 py-3 border-b border-slate-200 flex items-center justify-between">
+      <h2 class="text-sm uppercase text-slate-500 font-medium">Holdings · {{ rows | length }} positions</h2>
+      <span class="text-xs text-slate-400">Levels shown as distance from current price</span>
+    </div>
+    <div class="overflow-x-auto">
+      <table class="w-full text-sm">
+        <thead>
+          <tr class="sticky-th">
+            <th class="px-3 py-2 text-left">Ticker</th>
+            <th class="px-3 py-2 text-left">Leg</th>
+            <th class="px-3 py-2 text-right">Qty</th>
+            <th class="px-3 py-2 text-right">Avg Cost</th>
+            <th class="px-3 py-2 text-right">Price</th>
+            <th class="px-3 py-2 text-right">Mkt Value</th>
+            <th class="px-3 py-2 text-right">P&amp;L</th>
+            <th class="px-3 py-2 text-right">24h</th>
+            <th class="px-3 py-2 text-right">7d</th>
+            <th class="px-3 py-2 text-right">→ Entry</th>
+            <th class="px-3 py-2 text-right">→ Stop</th>
+            <th class="px-3 py-2 text-right">→ Exit</th>
+          </tr>
+        </thead>
+        <tbody>
+        {% for r in rows %}
+          <tr class="border-b border-slate-100 hover:bg-slate-50">
+            <td class="px-3 py-2">
+              <div class="font-semibold">{{ r.ticker }}</div>
+              <div class="text-xs text-slate-500">{{ r.name }}</div>
+            </td>
+            <td class="px-3 py-2 text-xs">{{ r.leg }}</td>
+            <td class="px-3 py-2 text-right">{{ "%.0f"|format(r.quantity) }}</td>
+            <td class="px-3 py-2 text-right">{{ "%.2f"|format(r.avg_cost) }}</td>
+            <td class="px-3 py-2 text-right">
+              {% if r.price %}{{ "%.2f"|format(r.price) }}{% else %}—{% endif %}
+            </td>
+            <td class="px-3 py-2 text-right">{{ r.market_value | usd }}</td>
+            <td class="px-3 py-2 text-right {% if r.pnl >= 0 %}pos{% else %}neg{% endif %}">
+              {{ r.pnl | usd }}<br>
+              <span class="text-xs">{{ r.pnl_pct | pct }}</span>
+            </td>
+            <td class="px-3 py-2 text-right text-xs
+              {% if r.chg_24h is none %}neutral
+              {% elif r.chg_24h >= 0 %}pos{% else %}neg{% endif %}">{{ r.chg_24h | pct }}</td>
+            <td class="px-3 py-2 text-right text-xs
+              {% if r.chg_7d is none %}neutral
+              {% elif r.chg_7d >= 0 %}pos{% else %}neg{% endif %}">{{ r.chg_7d | pct }}</td>
+            <td class="px-3 py-2 text-right text-xs">
+              {% if r.entry_target %}
+                <span class="{% if r.dist_to_entry_pct and r.dist_to_entry_pct <= 5 %}badge badge-warn{% endif %}">
+                  {{ r.dist_to_entry_pct | pct }}
+                </span>
+              {% else %}—{% endif %}
+            </td>
+            <td class="px-3 py-2 text-right text-xs">
+              {% if r.stop_loss %}
+                <span class="{% if r.dist_to_stop_pct and r.dist_to_stop_pct <= 10 %}badge badge-crit{% endif %}">
+                  {{ r.dist_to_stop_pct | pct }}
+                </span>
+              {% else %}—{% endif %}
+            </td>
+            <td class="px-3 py-2 text-right text-xs">
+              {% if r.exit_target %}
+                <span class="{% if r.dist_to_exit_pct and r.dist_to_exit_pct <= 5 %}badge badge-info{% endif %}">
+                  {{ r.dist_to_exit_pct | pct }}
+                </span>
+              {% else %}—{% endif %}
+            </td>
+          </tr>
+        {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <!-- Trade statement upload -->
+  <section class="bg-white rounded-lg shadow-sm p-4">
+    <div class="flex items-center justify-between mb-3">
+      <h2 class="text-sm uppercase text-slate-500 font-medium">Upload Trade Statement</h2>
+      <span class="text-xs text-slate-400">{{ txn_total }} transactions in ledger</span>
+    </div>
+    <form id="upload-form" class="flex items-center gap-3">
+      <input type="file" name="file" accept=".pdf,.csv" required
+             class="flex-1 text-sm file:mr-3 file:px-3 file:py-1.5 file:rounded file:border-0 file:bg-[#1F4E78] file:text-white file:cursor-pointer">
+      <button type="submit"
+              class="bg-[#1F4E78] text-white px-4 py-1.5 rounded text-sm font-medium hover:bg-[#2c5f8d]">
+        Upload &amp; Ingest
+      </button>
+    </form>
+    <div id="upload-status" class="text-sm mt-3"></div>
+    <p class="text-xs text-slate-400 mt-2">
+      Drop an IBKR Transaction History (PDF) or Activity Flex Statement (CSV).
+      Duplicates are silently skipped. Positions recompute automatically.
+    </p>
+
+    {% if recent_ingestions %}
+      <div class="mt-4 border-t border-slate-200 pt-3">
+        <div class="text-xs uppercase text-slate-500 font-medium mb-2">Recent ingestions</div>
+        <div class="space-y-1">
+          {% for ig in recent_ingestions %}
+            <div class="flex items-center justify-between text-xs">
+              <div class="truncate flex-1">
+                <span class="font-mono">{{ ig.source_file }}</span>
+                {% if ig.status == 'ok' %}
+                  <span class="badge badge-info ml-2">{{ ig.txns_new }} new / {{ ig.txns_total }} total</span>
+                {% else %}
+                  <span class="badge badge-crit ml-2">error</span>
+                {% endif %}
+              </div>
+              <div class="text-slate-400">{{ ig.ts[:16] }}</div>
+            </div>
+            {% if ig.error %}
+              <div class="text-xs text-red-600 ml-2">{{ ig.error[:200] }}</div>
+            {% endif %}
+          {% endfor %}
+        </div>
+      </div>
+    {% endif %}
+  </section>
+
+  <!-- Recent transactions -->
+  {% if recent_txns %}
+  <section class="bg-white rounded-lg shadow-sm overflow-hidden">
+    <div class="px-4 py-3 border-b border-slate-200">
+      <h2 class="text-sm uppercase text-slate-500 font-medium">
+        Recent Transactions ({{ recent_txns | length }} of {{ txn_total }})
+      </h2>
+    </div>
+    <div class="overflow-x-auto">
+      <table class="w-full text-sm">
+        <thead>
+          <tr class="sticky-th">
+            <th class="px-3 py-2 text-left">Date</th>
+            <th class="px-3 py-2 text-left">Type</th>
+            <th class="px-3 py-2 text-left">Symbol</th>
+            <th class="px-3 py-2 text-right">Qty</th>
+            <th class="px-3 py-2 text-right">Net USD</th>
+            <th class="px-3 py-2 text-left">Description</th>
+            <th class="px-3 py-2 text-left">Source</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for t in recent_txns %}
+            <tr class="border-b border-slate-100">
+              <td class="px-3 py-2 text-xs">{{ t.date }}</td>
+              <td class="px-3 py-2 text-xs">
+                <span class="badge {% if t.type == 'Buy' %}badge-info{% elif t.type == 'Sell' %}badge-warn{% else %}badge-info{% endif %}">
+                  {{ t.type }}
+                </span>
+              </td>
+              <td class="px-3 py-2 font-semibold">{{ t.symbol or '—' }}</td>
+              <td class="px-3 py-2 text-right">{{ "%.2f"|format(t.quantity) if t.quantity is not none else '—' }}</td>
+              <td class="px-3 py-2 text-right {% if t.net_usd >= 0 %}pos{% else %}neg{% endif %}">
+                {{ t.net_usd | usd }}
+              </td>
+              <td class="px-3 py-2 text-xs text-slate-600 truncate" style="max-width:300px">{{ t.description }}</td>
+              <td class="px-3 py-2 text-xs text-slate-400 truncate" style="max-width:200px">{{ t.source_file }}</td>
+            </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </section>
+  {% endif %}
+
+  <!-- Recent alerts -->
+  <section class="bg-white rounded-lg shadow-sm p-4">
+    <h2 class="text-sm uppercase text-slate-500 font-medium mb-3">Recent Analysis Runs</h2>
+    {% if recent_alerts %}
+      <div class="space-y-2">
+        {% for a in recent_alerts %}
+          <div class="border-l-4 pl-3 py-2
+            {% if a.actionable == 0 %}border-slate-300
+            {% elif a.actionable < 3 %}border-amber-400
+            {% else %}border-red-500{% endif %}">
+            <div class="text-xs text-slate-500">{{ a.ts }}</div>
+            <div class="text-sm">
+              {{ a.actionable }} actionable / {{ a.triggers_in }} triggers
+            </div>
+            {% if a.summary %}
+              <div class="text-xs text-slate-600 mt-1 whitespace-pre-line">{{ a.summary[:300] }}{% if a.summary|length > 300 %}…{% endif %}</div>
+            {% endif %}
+          </div>
+        {% endfor %}
+      </div>
+    {% else %}
+      <div class="text-sm text-slate-400">No analysis runs yet.</div>
+    {% endif %}
+  </section>
+
+  </div><!-- /holdings panel -->
+
+  <!-- ====================== TAX PANEL ====================== -->
+  <div data-tab-panel="tax" class="space-y-6">
+
+    <!-- Disclaimer -->
+    <section class="bg-amber-50 border-l-4 border-amber-400 rounded p-4 text-sm text-amber-900">
+      <div class="font-semibold mb-1">Read before using these numbers</div>
+      <ul class="list-disc pl-5 space-y-1 text-amber-800">
+        <li>This tab applies <strong>one flat USD→INR rate</strong> to every transaction. Real filing requires the
+          <strong>SBI TT-buying rate of the last day of the month preceding each transaction</strong>
+          (Rule 115, IT Rules).</li>
+        <li>LTCG is computed at <strong>12.5% without indexation</strong> (Finance (No.2) Act 2024, applies on transfers on/after 23-Jul-2024).
+          Pre-23-Jul-2024 sales fell under 20% with indexation — not modelled here. The ₹1.25L exemption applies to
+          <em>domestic</em> listed equity only, so it is <strong>not</strong> applied to your foreign holdings.</li>
+        <li>STCG is taxed at your applicable income-tax slab — shown as an amount only, not as estimated tax.</li>
+        <li>Holding-period split uses the 24-month rule for foreign listed shares. Edge cases around month-end can shift the LTCG/STCG boundary by ±1 day.</li>
+        <li><strong>Surcharge &amp; cess, DTAA foreign-tax credit on dividends — not applied.</strong> Sanity-check with a CA before filing.</li>
+      </ul>
+    </section>
+
+    <!-- Controls -->
+    <section class="bg-white rounded-lg shadow-sm p-4">
+      <form method="get" action="/" class="flex flex-wrap items-end gap-4">
+        <input type="hidden" name="tab" value="tax">
+        <div>
+          <label class="block text-xs uppercase text-slate-500 font-medium mb-1">USD → INR rate</label>
+          <input type="number" name="fx" step="0.01" min="1"
+                 value="{{ fx_rate if fx_rate is not none else '' }}"
+                 placeholder="e.g. 85.20"
+                 class="border border-slate-300 rounded px-3 py-2 text-sm w-40">
+          <div class="text-xs text-slate-500 mt-1">source: {{ fx_source }}</div>
+        </div>
+        <div>
+          <label class="block text-xs uppercase text-slate-500 font-medium mb-1">Financial Year</label>
+          <select name="fy" class="border border-slate-300 rounded px-3 py-2 text-sm">
+            {% for y in fy_options %}
+              <option value="{{ y }}" {% if y == fy_start_year %}selected{% endif %}>
+                FY {{ y }}-{{ '%02d' % ((y + 1) % 100) }}
+              </option>
+            {% endfor %}
+          </select>
+        </div>
+        <div>
+          <label class="block text-xs uppercase text-slate-500 font-medium mb-1">Schedule FA Calendar Year</label>
+          <select name="cy" class="border border-slate-300 rounded px-3 py-2 text-sm">
+            {% for y in cy_options %}
+              <option value="{{ y }}" {% if y == cy %}selected{% endif %}>{{ y }}</option>
+            {% endfor %}
+          </select>
+        </div>
+        <button type="submit" class="bg-[#1F4E78] text-white px-4 py-2 rounded text-sm font-medium">
+          Recompute
+        </button>
+      </form>
+      {% if fx_rate is none %}
+        <div class="mt-3 bg-red-50 border-l-4 border-red-400 p-3 text-sm text-red-800">
+          No USD/INR rate available (yfinance was removed; cache is empty).
+          INR columns will show ₹0.00 until you enter a rate above.
+        </div>
+      {% endif %}
+    </section>
+
+    <!-- Summary cards -->
+    <section class="grid grid-cols-2 md:grid-cols-4 gap-4">
+      <div class="bg-white rounded-lg shadow-sm p-4">
+        <div class="text-xs uppercase text-slate-500 font-medium">LTCG (FY {{ fy_label }})</div>
+        <div class="text-xl font-semibold mt-1 {% if realized.ltcg_inr > 0 %}pos{% elif realized.ltcg_inr < 0 %}neg{% endif %}">
+          {{ realized.ltcg_inr | inr }}
+        </div>
+        <div class="text-xs text-slate-500 mt-1">USD: {{ realized.ltcg_usd | usd }}</div>
+      </div>
+      <div class="bg-white rounded-lg shadow-sm p-4">
+        <div class="text-xs uppercase text-slate-500 font-medium">STCG (FY {{ fy_label }})</div>
+        <div class="text-xl font-semibold mt-1 {% if realized.stcg_inr > 0 %}pos{% elif realized.stcg_inr < 0 %}neg{% endif %}">
+          {{ realized.stcg_inr | inr }}
+        </div>
+        <div class="text-xs text-slate-500 mt-1">USD: {{ realized.stcg_usd | usd }}</div>
+      </div>
+      <div class="bg-white rounded-lg shadow-sm p-4">
+        <div class="text-xs uppercase text-slate-500 font-medium">Dividends (FY)</div>
+        <div class="text-xl font-semibold mt-1">{{ dividends.total_inr | inr }}</div>
+        <div class="text-xs text-slate-500 mt-1">USD: {{ dividends.total_usd | usd }}</div>
+      </div>
+      <div class="bg-white rounded-lg shadow-sm p-4">
+        <div class="text-xs uppercase text-slate-500 font-medium">LTCG tax @ {{ "%.1f"|format(realized.ltcg_rate_pct) }}%</div>
+        <div class="text-xl font-semibold mt-1">{{ realized.ltcg_tax_inr | inr }}</div>
+        <div class="text-xs text-slate-500 mt-1">base only, no surcharge/cess</div>
+      </div>
+    </section>
+
+    <!-- Realized gains table -->
+    <section class="bg-white rounded-lg shadow-sm p-4">
+      <h2 class="text-sm uppercase text-slate-500 font-medium mb-3">
+        Realized gains — FY {{ fy_label }} ({{ realized.fy_start }} to {{ realized.fy_end }}) · FIFO matched
+      </h2>
+      {% if realized.gains %}
+        <div class="overflow-x-auto">
+          <table class="w-full text-sm">
+            <thead>
+              <tr class="bg-slate-100 text-left">
+                <th class="px-2 py-2">Symbol</th>
+                <th class="px-2 py-2">Sell date</th>
+                <th class="px-2 py-2 text-right">Qty</th>
+                <th class="px-2 py-2">Buy date</th>
+                <th class="px-2 py-2 text-right">Held (days)</th>
+                <th class="px-2 py-2">Type</th>
+                <th class="px-2 py-2 text-right">Proceeds (USD)</th>
+                <th class="px-2 py-2 text-right">Cost (USD)</th>
+                <th class="px-2 py-2 text-right">Gain (USD)</th>
+                <th class="px-2 py-2 text-right">Gain (INR)</th>
+              </tr>
+            </thead>
+            <tbody>
+              {% for g in realized.gains %}
+                <tr class="border-t border-slate-100">
+                  <td class="px-2 py-2 font-medium">{{ g.symbol }}</td>
+                  <td class="px-2 py-2 text-slate-600">{{ g.sell_date }}</td>
+                  <td class="px-2 py-2 text-right">{{ "%.4f"|format(g.sell_qty) }}</td>
+                  <td class="px-2 py-2 text-slate-600">{{ g.buy_date }}</td>
+                  <td class="px-2 py-2 text-right">{{ g.holding_days }}</td>
+                  <td class="px-2 py-2">
+                    {% if g.is_long_term %}
+                      <span class="badge badge-info">LTCG</span>
+                    {% else %}
+                      <span class="badge badge-warn">STCG</span>
+                    {% endif %}
+                  </td>
+                  <td class="px-2 py-2 text-right">{{ g.sell_proceeds_usd | usd }}</td>
+                  <td class="px-2 py-2 text-right">{{ g.buy_cost_usd | usd }}</td>
+                  <td class="px-2 py-2 text-right {% if g.gain_usd >= 0 %}pos{% else %}neg{% endif %}">
+                    {{ g.gain_usd | usd }}
+                  </td>
+                  <td class="px-2 py-2 text-right {% if g.gain_inr >= 0 %}pos{% else %}neg{% endif %}">
+                    {{ g.gain_inr | inr }}
+                  </td>
+                </tr>
+              {% endfor %}
+            </tbody>
+            <tfoot>
+              <tr class="border-t-2 border-slate-300 font-semibold bg-slate-50">
+                <td colspan="6" class="px-2 py-2">Totals — LTCG / STCG</td>
+                <td class="px-2 py-2"></td>
+                <td class="px-2 py-2"></td>
+                <td class="px-2 py-2 text-right">
+                  <div>{{ realized.ltcg_usd | usd }}</div>
+                  <div class="text-xs font-normal text-slate-500">{{ realized.stcg_usd | usd }}</div>
+                </td>
+                <td class="px-2 py-2 text-right">
+                  <div>{{ realized.ltcg_inr | inr }}</div>
+                  <div class="text-xs font-normal text-slate-500">{{ realized.stcg_inr | inr }}</div>
+                </td>
+              </tr>
+            </tfoot>
+          </table>
+        </div>
+        {% if realized.unmatched_sells %}
+          <div class="mt-3 text-xs text-red-700 bg-red-50 rounded p-2">
+            ⚠ {{ realized.unmatched_sells|length }} sell(s) had no buy lot to match against (qty exceeds known buys).
+            Likely a data gap — make sure all historic IBKR statements have been ingested.
+          </div>
+        {% endif %}
+      {% else %}
+        <div class="text-sm text-slate-400">No realized sales in this FY.</div>
+      {% endif %}
+    </section>
+
+    <!-- Dividend table -->
+    <section class="bg-white rounded-lg shadow-sm p-4">
+      <h2 class="text-sm uppercase text-slate-500 font-medium mb-3">
+        Dividends — FY {{ fy_label }}
+      </h2>
+      {% if dividends.rows %}
+        <div class="overflow-x-auto">
+          <table class="w-full text-sm">
+            <thead>
+              <tr class="bg-slate-100 text-left">
+                <th class="px-2 py-2">Date</th>
+                <th class="px-2 py-2">Symbol</th>
+                <th class="px-2 py-2">Description</th>
+                <th class="px-2 py-2 text-right">USD</th>
+                <th class="px-2 py-2 text-right">INR</th>
+              </tr>
+            </thead>
+            <tbody>
+              {% for d in dividends.rows %}
+                <tr class="border-t border-slate-100">
+                  <td class="px-2 py-2 text-slate-600">{{ d.date }}</td>
+                  <td class="px-2 py-2 font-medium">{{ d.symbol }}</td>
+                  <td class="px-2 py-2 text-slate-600 text-xs">{{ d.description }}</td>
+                  <td class="px-2 py-2 text-right">{{ d.usd | usd }}</td>
+                  <td class="px-2 py-2 text-right">{{ d.inr | inr }}</td>
+                </tr>
+              {% endfor %}
+            </tbody>
+            <tfoot>
+              <tr class="border-t-2 border-slate-300 font-semibold bg-slate-50">
+                <td colspan="3" class="px-2 py-2">Total — taxed at applicable slab</td>
+                <td class="px-2 py-2 text-right">{{ dividends.total_usd | usd }}</td>
+                <td class="px-2 py-2 text-right">{{ dividends.total_inr | inr }}</td>
+              </tr>
+            </tfoot>
+          </table>
+        </div>
+      {% else %}
+        <div class="text-sm text-slate-400">No dividend transactions in this FY.</div>
+      {% endif %}
+    </section>
+
+    <!-- Schedule FA table -->
+    <section class="bg-white rounded-lg shadow-sm p-4">
+      <h2 class="text-sm uppercase text-slate-500 font-medium mb-1">
+        Schedule FA — Section A3 (Foreign Equity &amp; Debt Interest)
+      </h2>
+      <p class="text-xs text-slate-500 mb-3">
+        Calendar year {{ sched_fa.cy }} ({{ sched_fa.cy_start }} to {{ sched_fa.cy_end }}).
+        Peak balance is approximated as max(closing value, cost basis remaining, lifetime invested) — we don't keep daily price history.
+        Country code, issuer name &amp; address come from your IBKR statement — fill those in manually when filing.
+      </p>
+      {% if sched_fa.rows %}
+        <div class="overflow-x-auto">
+          <table class="w-full text-sm">
+            <thead>
+              <tr class="bg-slate-100 text-left">
+                <th class="px-2 py-2">Symbol</th>
+                <th class="px-2 py-2">Acquired</th>
+                <th class="px-2 py-2 text-right">Initial inv. (INR)</th>
+                <th class="px-2 py-2 text-right">Closing qty</th>
+                <th class="px-2 py-2 text-right">Closing (INR)</th>
+                <th class="px-2 py-2 text-right">Peak (INR)</th>
+                <th class="px-2 py-2 text-right">Dividend (INR)</th>
+                <th class="px-2 py-2 text-right">Proceeds (INR)</th>
+              </tr>
+            </thead>
+            <tbody>
+              {% for r in sched_fa.rows %}
+                <tr class="border-t border-slate-100">
+                  <td class="px-2 py-2 font-medium">{{ r.symbol }}</td>
+                  <td class="px-2 py-2 text-slate-600">{{ r.first_buy_date }}</td>
+                  <td class="px-2 py-2 text-right">{{ r.initial_investment_inr | inr }}</td>
+                  <td class="px-2 py-2 text-right">{{ "%.4f"|format(r.closing_qty) }}</td>
+                  <td class="px-2 py-2 text-right">{{ r.closing_inr | inr }}</td>
+                  <td class="px-2 py-2 text-right">{{ r.peak_inr | inr }}</td>
+                  <td class="px-2 py-2 text-right">{{ r.dividend_inr | inr }}</td>
+                  <td class="px-2 py-2 text-right">{{ r.proceeds_inr | inr }}</td>
+                </tr>
+              {% endfor %}
+            </tbody>
+            <tfoot>
+              <tr class="border-t-2 border-slate-300 font-semibold bg-slate-50">
+                <td colspan="2" class="px-2 py-2">Totals</td>
+                <td class="px-2 py-2 text-right">{{ sched_fa.totals.initial_investment_inr | inr }}</td>
+                <td class="px-2 py-2"></td>
+                <td class="px-2 py-2 text-right">{{ sched_fa.totals.closing_inr | inr }}</td>
+                <td class="px-2 py-2 text-right">{{ sched_fa.totals.peak_inr | inr }}</td>
+                <td class="px-2 py-2 text-right">{{ sched_fa.totals.dividend_inr | inr }}</td>
+                <td class="px-2 py-2 text-right">{{ sched_fa.totals.proceeds_inr | inr }}</td>
+              </tr>
+            </tfoot>
+          </table>
+        </div>
+      {% else %}
+        <div class="text-sm text-slate-400">No positions or transactions in this calendar year.</div>
+      {% endif %}
+    </section>
+
+  </div><!-- /tax panel -->
+
+  <footer class="text-xs text-slate-400 text-center pt-6 pb-3">
+    Portfolio Monitor · TradingView + Claude Haiku · auto-refresh every {{ refresh_minutes }} min
+  </footer>
+</main>
+
+<script>
+  // Tab switching. The server picks the initial tab via active_tab; clicking
+  // a tab link switches in-place AND updates the URL so a refresh stays put.
+  (function () {
+    const initial = {{ active_tab | tojson }};
+    function activate(name) {
+      document.querySelectorAll('.tab-link').forEach(l => {
+        l.classList.toggle('is-active', l.dataset.tab === name);
+      });
+      document.querySelectorAll('[data-tab-panel]').forEach(p => {
+        p.classList.toggle('is-active', p.dataset.tabPanel === name);
+      });
+    }
+    activate(initial);
+    document.querySelectorAll('.tab-link').forEach(link => {
+      link.addEventListener('click', e => {
+        e.preventDefault();
+        const name = link.dataset.tab;
+        activate(name);
+        // Preserve other query params; just flip the tab.
+        const url = new URL(location.href);
+        url.searchParams.set('tab', name);
+        history.replaceState(null, '', url.toString());
+      });
+    });
+  })();
+</script>
+
+<script>
+  // Upload form: submit via fetch, show status, reload after 2s
+  const form = document.getElementById('upload-form');
+  const status = document.getElementById('upload-status');
+  if (form) {
+    form.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const data = new FormData(form);
+      status.innerHTML = '<span class="text-slate-500">Uploading and parsing…</span>';
+      try {
+        const res = await fetch('/upload', { method: 'POST', body: data, credentials: 'same-origin' });
+        const j = await res.json();
+        if (!res.ok) throw new Error(j.detail || res.statusText);
+        const errs = (j.errors || []).length;
+        status.innerHTML = `<span class="text-emerald-700">✓ ${j.files} file(s), ${j.txns_new} new transactions${errs ? `, ${errs} errors` : ''}. Reloading…</span>`;
+        setTimeout(() => location.reload(), 1500);
+      } catch (err) {
+        status.innerHTML = `<span class="text-red-700">✗ ${err.message}</span>`;
+      }
+    });
+  }
+</script>
+</body>
+</html>
