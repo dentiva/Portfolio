@@ -1,0 +1,42 @@
+{
+  "_comment": "Edit this file to update holdings, thresholds, and macro watch. Restart service after editing. tv_url is the TradingView ticker page — primary price source when set; yfinance fallback otherwise.",
+  "settings": {
+    "poll_interval_hours": 3,
+    "max_alerts_per_day": 8,
+    "drawdown_alert_pct_24h": 5.0,
+    "drawdown_alert_pct_7d": 10.0,
+    "dashboard_refresh_minutes": 30,
+    "claude_model": "claude-haiku-4-5-20251001"
+  },
+  "holdings": [
+    {"ticker": "VWRA", "yf_symbol": "VWRA.L", "tv_url": "https://in.tradingview.com/symbols/LSE-VWRA/", "name": "Vanguard FTSE All-World UCITS Acc", "leg": "Core ETF", "quantity": 10, "avg_cost_usd": 180.00, "entry_target": null, "exit_target": null, "stop_loss": 162.00, "thesis": "Sole core holding. Diversified all-world. Acc share class."},
+    {"ticker": "VHYL", "yf_symbol": "VHYL.L", "tv_url": "https://in.tradingview.com/symbols/LSE-VHYL/", "name": "Vanguard FTSE High Div Yield (Dist)", "leg": "Exit", "quantity": 46, "avg_cost_usd": 88.27, "entry_target": null, "exit_target": 92.00, "stop_loss": null, "thesis": "EXIT planned -> VWRA. Dist share class is tax-inefficient."},
+    {"ticker": "WCBR", "yf_symbol": "WCBR.L", "tv_url": "https://in.tradingview.com/symbols/LSE-WCBR/", "name": "WisdomTree Cybersecurity Acc", "leg": "Thematic ETF", "quantity": 100, "avg_cost_usd": 23.55, "entry_target": 22.00, "exit_target": null, "stop_loss": 19.50, "thesis": "Conviction theme. Durable cybersecurity tailwind."},
+    {"ticker": "WDEF", "yf_symbol": "WDEF.L", "tv_url": "https://in.tradingview.com/symbols/LSE-WDEF/", "name": "WisdomTree Europe Defence UCITS", "leg": "Thematic ETF", "quantity": 100, "avg_cost_usd": 39.57, "entry_target": null, "exit_target": null, "stop_loss": 34.00, "thesis": "Reduce to 40% of defense slot once NATO position opened."},
+    {"ticker": "REMX", "yf_symbol": "REMX.L", "tv_url": "https://in.tradingview.com/symbols/LSE-REMX/", "name": "VanEck Rare Earth UCITS ETF", "leg": "Exit", "quantity": 264, "avg_cost_usd": 19.44, "entry_target": null, "exit_target": 22.00, "stop_loss": null, "thesis": "EXIT planned. Narrow niche. Re-enter only post-thesis."},
+    {"ticker": "INFR", "yf_symbol": "INFR.L", "tv_url": "https://in.tradingview.com/symbols/LSE-INFR/", "name": "iShares Global Infrastructure (Dist)", "leg": "Exit", "quantity": 40, "avg_cost_usd": 39.09, "entry_target": null, "exit_target": null, "stop_loss": null, "thesis": "EXIT planned. Utility-heavy, distributing class."},
+    {"ticker": "MOO", "yf_symbol": "MOO", "tv_url": "https://in.tradingview.com/symbols/AMEX-MOO/", "name": "VanEck Agribusiness ETF", "leg": "Exit Priority", "quantity": 118, "avg_cost_usd": 83.68, "entry_target": null, "exit_target": null, "stop_loss": null, "thesis": "EXIT PRIORITY: US-domiciled, estate-tax risk."},
+    {"ticker": "AMZN", "yf_symbol": "AMZN", "tv_url": "https://in.tradingview.com/symbols/NASDAQ-AMZN/", "name": "Amazon.com Inc", "leg": "Alpha", "quantity": 10, "avg_cost_usd": 272.65, "entry_target": 250.00, "exit_target": null, "stop_loss": 230.00, "thesis": "Mega-cap quality. AWS + retail + ads flywheel."},
+    {"ticker": "CRDO", "yf_symbol": "CRDO", "tv_url": "https://in.tradingview.com/symbols/NASDAQ-CRDO/", "name": "Credo Technology Group", "leg": "Alpha", "quantity": 20, "avg_cost_usd": 183.00, "entry_target": 160.00, "exit_target": null, "stop_loss": 145.00, "thesis": "AI infra connectivity. AEC + DSP scaling with hyperscaler capex."},
+    {"ticker": "KRYS", "yf_symbol": "KRYS", "tv_url": "https://in.tradingview.com/symbols/NASDAQ-KRYS/", "name": "Krystal Biotech Inc", "leg": "Alpha", "quantity": 10, "avg_cost_usd": 296.28, "entry_target": 265.00, "exit_target": null, "stop_loss": 230.00, "thesis": "Vyjuvek commercial. Rare-disease pricing. Oncology pipeline."},
+    {"ticker": "AMPX", "yf_symbol": "AMPX", "tv_url": "https://in.tradingview.com/symbols/NYSE-AMPX/", "name": "Amprius Technologies Inc", "leg": "Exit", "quantity": 100, "avg_cost_usd": 16.53, "entry_target": null, "exit_target": null, "stop_loss": null, "thesis": "EXIT planned. Unprofitable, sub-scale."},
+    {"ticker": "MXL", "yf_symbol": "MXL", "tv_url": "https://in.tradingview.com/symbols/NASDAQ-MXL/", "name": "MaxLinear Inc", "leg": "Exit", "quantity": 10, "avg_cost_usd": 92.78, "entry_target": null, "exit_target": null, "stop_loss": null, "thesis": "EXIT planned. Sub-scale position."},
+    {"ticker": "SNI", "yf_symbol": "SNI.OL", "tv_url": "https://in.tradingview.com/symbols/OSL-SNI/", "name": "Stolt-Nielsen Ltd", "leg": "Exit", "quantity": 40, "avg_cost_usd": 32.42, "entry_target": null, "exit_target": null, "stop_loss": null, "thesis": "EXIT planned. Illiquid Oslo listing."},
+    {"ticker": "IGLN", "yf_symbol": "IGLN.L", "tv_url": "https://in.tradingview.com/symbols/LSE-IGLN/", "name": "iShares Physical Gold ETC", "leg": "Buffer", "quantity": 55, "avg_cost_usd": 92.93, "entry_target": null, "exit_target": null, "stop_loss": null, "thesis": "Reduce — Indian gold provides backstop."},
+    {"ticker": "SSLN", "yf_symbol": "SSLN.L", "tv_url": "https://in.tradingview.com/symbols/LSE-SSLN/", "name": "iShares Physical Silver ETC", "leg": "Exit", "quantity": 15, "avg_cost_usd": 75.26, "entry_target": null, "exit_target": null, "stop_loss": null, "thesis": "EXIT planned. Redundant with gold."},
+    {"ticker": "GDX", "yf_symbol": "GDX.L", "tv_url": "https://in.tradingview.com/symbols/LSE-GDX/", "name": "VanEck Gold Miners UCITS ETF", "leg": "Exit", "quantity": 20, "avg_cost_usd": 97.81, "entry_target": null, "exit_target": null, "stop_loss": null, "thesis": "EXIT planned. Redundant with gold."},
+    {"ticker": "SKE", "yf_symbol": "SKE.TO", "tv_url": "https://in.tradingview.com/symbols/TSX-SKE/", "name": "Skeena Resources Ltd", "leg": "Buffer", "quantity": 100, "avg_cost_usd": 32.03, "entry_target": null, "exit_target": null, "stop_loss": 25.00, "thesis": "Q2 2027 production target. Decide: alpha or exit."},
+    {"ticker": "XLES", "yf_symbol": "XLES.L", "tv_url": "https://in.tradingview.com/symbols/LSE-XLES/", "name": "Invesco US Energy S&P", "leg": "Exit", "quantity": 7, "avg_cost_usd": 795.57, "entry_target": null, "exit_target": null, "stop_loss": null, "thesis": "EXIT planned. Energy stack overweight."},
+    {"ticker": "CRAK", "yf_symbol": "CRAK", "tv_url": "https://in.tradingview.com/symbols/AMEX-CRAK/", "name": "VanEck Oil Refiners ETF", "leg": "Exit Priority", "quantity": 60, "avg_cost_usd": 47.91, "entry_target": null, "exit_target": null, "stop_loss": null, "thesis": "EXIT PRIORITY: US-domiciled, estate-tax risk."},
+    {"ticker": "CVX", "yf_symbol": "CVX", "tv_url": "https://in.tradingview.com/symbols/NYSE-CVX/", "name": "Chevron Corp", "leg": "Exit", "quantity": 10, "avg_cost_usd": 181.58, "entry_target": null, "exit_target": null, "stop_loss": null, "thesis": "EXIT planned. Energy stack overweight."},
+    {"ticker": "XEG", "yf_symbol": "XEG.TO", "tv_url": "https://in.tradingview.com/symbols/TSX-XEG/", "name": "iShares S&P/TSX Capped Energy", "leg": "Exit", "quantity": 58, "avg_cost_usd": 18.45, "entry_target": null, "exit_target": null, "stop_loss": null, "thesis": "EXIT planned. Energy stack overweight."}
+  ],
+  "macro_watch": [
+    {"symbol": "USDINR=X", "tv_url": null, "name": "USD/INR", "key_levels": {"break_above": 86.50, "break_below": 84.00}, "threshold_pct_24h": 1.0},
+    {"symbol": "CL=F",     "tv_url": "https://in.tradingview.com/symbols/NYMEX-CL1!/", "name": "WTI Crude Oil", "key_levels": {"break_above": 90.00, "break_below": 65.00}, "threshold_pct_24h": 5.0},
+    {"symbol": "GC=F",     "tv_url": null, "name": "Gold", "key_levels": {"break_above": 4800.00, "break_below": 4200.00}, "threshold_pct_24h": 3.0},
+    {"symbol": "^VIX",     "tv_url": null, "name": "VIX (volatility)", "key_levels": {"break_above": 25.00}, "threshold_pct_24h": 20.0},
+    {"symbol": "^GSPC",    "tv_url": "https://in.tradingview.com/symbols/SP-SPX/", "name": "S&P 500", "key_levels": {}, "threshold_pct_24h": 2.5},
+    {"symbol": "DX-Y.NYB", "tv_url": "https://in.tradingview.com/symbols/ICEUS-DX1!/", "name": "DXY (Dollar Index)", "key_levels": {}, "threshold_pct_24h": 1.0}
+  ]
+}
