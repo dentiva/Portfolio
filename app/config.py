@@ -85,6 +85,11 @@ class PollSettings(BaseModel):
     drawdown_alert_pct_7d: float = 10.0
     dashboard_refresh_minutes: int = 30
     claude_model: str = "claude-haiku-4-5-20251001"
+    # Conviction-gate threshold (0-100). Triggers passing the first-pass
+    # actionable filter must ALSO score above this on the second-pass
+    # noise-filter to actually email and be marked high-conviction on
+    # the dashboard. Items below get suppressed/demoted.
+    conviction_threshold: int = 80
 
 
 class Portfolio(BaseModel):

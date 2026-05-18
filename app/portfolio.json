@@ -32,10 +32,10 @@
     {"ticker": "XEG", "yf_symbol": "XEG.TO", "tv_url": "https://in.tradingview.com/symbols/TSX-XEG/", "name": "iShares S&P/TSX Capped Energy", "leg": "Exit", "quantity": 58, "avg_cost_usd": 18.45, "entry_target": null, "exit_target": null, "stop_loss": null, "thesis": "EXIT planned. Energy stack overweight."}
   ],
   "macro_watch": [
-    {"symbol": "USDINR=X", "tv_url": null, "name": "USD/INR", "key_levels": {"break_above": 86.50, "break_below": 84.00}, "threshold_pct_24h": 1.0},
+    {"symbol": "USDINR=X", "tv_url": "https://in.tradingview.com/symbols/USDINR/?exchange=FX_IDC", "name": "USD/INR", "key_levels": {"break_above": 86.50, "break_below": 84.00}, "threshold_pct_24h": 1.0},
     {"symbol": "CL=F",     "tv_url": "https://in.tradingview.com/symbols/NYMEX-CL1!/", "name": "WTI Crude Oil", "key_levels": {"break_above": 90.00, "break_below": 65.00}, "threshold_pct_24h": 5.0},
-    {"symbol": "GC=F",     "tv_url": null, "name": "Gold", "key_levels": {"break_above": 4800.00, "break_below": 4200.00}, "threshold_pct_24h": 3.0},
-    {"symbol": "^VIX",     "tv_url": null, "name": "VIX (volatility)", "key_levels": {"break_above": 25.00}, "threshold_pct_24h": 20.0},
+    {"symbol": "GC=F",     "tv_url": "https://in.tradingview.com/symbols/XAUUSD/?exchange=OANDA", "name": "Gold", "key_levels": {"break_above": 4800.00, "break_below": 4200.00}, "threshold_pct_24h": 3.0},
+    {"symbol": "^VIX",     "tv_url": "https://in.tradingview.com/symbols/TVC-VIX/", "name": "VIX (volatility)", "key_levels": {"break_above": 25.00}, "threshold_pct_24h": 20.0},
     {"symbol": "^GSPC",    "tv_url": "https://in.tradingview.com/symbols/SP-SPX/", "name": "S&P 500", "key_levels": {}, "threshold_pct_24h": 2.5},
     {"symbol": "DX-Y.NYB", "tv_url": "https://in.tradingview.com/symbols/ICEUS-DX1!/", "name": "DXY (Dollar Index)", "key_levels": {}, "threshold_pct_24h": 1.0}
   ]

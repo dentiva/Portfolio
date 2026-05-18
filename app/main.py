@@ -14,6 +14,7 @@ import secrets
 from contextlib import asynccontextmanager
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
+from apscheduler.triggers.cron import CronTrigger
 from apscheduler.triggers.interval import IntervalTrigger
 from fastapi import Depends, FastAPI, HTTPException, status
 from fastapi.responses import HTMLResponse, JSONResponse
@@ -21,7 +22,7 @@ from fastapi.security import HTTPBasic, HTTPBasicCredentials
 
 from fastapi import File, UploadFile
 
-from . import analysis, dashboard, ingest, prices, storage
+from . import analysis, dashboard, ingest, news, prices, storage, thesis
 from .alerts import detect_triggers
 from .config import portfolio, settings
 
@@ -75,6 +76,16 @@ def run_poll_cycle() -> dict:
     missing = sum(1 for _, src in price_map.values() if src == "missing")
     log.info("Prices: %d TV / %d cached / %d missing", tv, cached, missing)
 
+    # 1a. Record one daily close per (symbol, UTC date) for thesis-drift series.
+    #     Only seeds the series with LIVE prices — cached/missing are skipped.
+    closes_recorded = 0
+    for sym, (px, src) in price_map.items():
+        if src == "tradingview" and px:
+            if storage.record_daily_close_if_first(sym, px):
+                closes_recorded += 1
+    if closes_recorded:
+        log.info("Daily-close series seeded for %d symbols today", closes_recorded)
+
     # 2. Detect triggers
     triggers = detect_triggers(price_map)
     log.info("Detected %d triggers", len(triggers))
@@ -86,6 +97,26 @@ def run_poll_cycle() -> dict:
         result = analysis.analyze_and_alert(triggers, price_map)
     else:
         result = {"triggers_in": 0, "actionable": 0, "summary": "no triggers"}
+
+    # 3a. Macro regime synthesis — one Haiku call tying macros to leg exposures.
+    #     Cheap (~$0.0003/call) and always-on; the dashboard pulls latest_macro_regime().
+    try:
+        macro_snapshot = {
+            m.symbol: {
+                "name": m.name,
+                "price": price_map.get(m.symbol, (None, None))[0],
+                "key_levels": m.key_levels,
+            }
+            for m in portfolio.macro_watch
+        }
+        leg_exposure: dict[str, float] = {}
+        for h in portfolio.holdings:
+            px = price_map.get(h.yf_symbol, (None, None))[0]
+            if px:
+                leg_exposure[h.leg] = leg_exposure.get(h.leg, 0) + px * h.quantity
+        analysis.synthesize_macro_regime(macro_snapshot, leg_exposure)
+    except Exception:
+        log.exception("Macro regime synthesis failed (continuing)")
 
     # 4. Housekeeping: prune old prices weekly-ish
     storage.prune_old_prices(keep_days=60)
@@ -103,6 +134,40 @@ def run_poll_cycle() -> dict:
     }
 
 
+def run_news_cycle() -> dict:
+    """Standalone wrapper for the news monitor.
+    Twice-daily scheduled job + POST /run-news for manual triggering.
+    """
+    log.info("=== News cycle starting ===")
+    result = news.run_news_cycle()
+    log.info("=== News cycle done: %s ===", result)
+    return result
+
+
+def run_thesis_drift_cycle() -> dict:
+    """Standalone wrapper for the thesis-drift sentinel.
+
+    Weekly job (Sunday) + POST /run-thesis-drift for manual triggering.
+    When the scorer emits drift triggers, push them through the regular
+    analyze_and_alert pipeline so they show up in email like price triggers.
+    """
+    log.info("=== Thesis-drift cycle starting ===")
+    out = thesis.run_thesis_drift_cycle()
+    triggers = out.get("triggers", [])
+    summary = {"scored": out.get("scored", 0), "triggers": len(triggers)}
+
+    if triggers:
+        log.info("Pushing %d thesis-drift trigger(s) to analyze_and_alert", len(triggers))
+        try:
+            # No price_map needed for context here — drift triggers are
+            # narrative, not numeric — pass an empty dict.
+            analysis.analyze_and_alert(triggers, {})
+        except Exception:
+            log.exception("Drift trigger analysis failed (continuing)")
+    log.info("=== Thesis-drift cycle done: %s ===", summary)
+    return summary
+
+
 @asynccontextmanager
 async def lifespan(_: FastAPI):
     """Init DB, init ingest dirs, start scheduler, optional startup poll."""
@@ -118,8 +183,32 @@ async def lifespan(_: FastAPI):
         max_instances=1,
         coalesce=True,
     )
+
+    # News monitor: 09:00 and 16:00 IST (= 03:30 and 10:30 UTC).
+    # IST = UTC+5:30; these are pre-market and post-market closures for
+    # markets the user cares about (US opens 19:00 IST; LSE closes 21:00 IST).
+    scheduler.add_job(
+        run_news_cycle,
+        trigger=CronTrigger(hour="3,10", minute=30),
+        id="news",
+        max_instances=1,
+        coalesce=True,
+    )
+
+    # Thesis-drift sentinel: Sundays at 11:00 IST (= Sun 05:30 UTC).
+    # Sunday morning gives the weekend's news a chance to settle, and the
+    # output is fresh for Monday's planning.
+    scheduler.add_job(
+        run_thesis_drift_cycle,
+        trigger=CronTrigger(day_of_week="sun", hour=5, minute=30),
+        id="thesis_drift",
+        max_instances=1,
+        coalesce=True,
+    )
+
     scheduler.start()
-    log.info("Scheduler started (every %d hours)", interval_hours)
+    log.info("Scheduler started: poll every %dh; news 09:00/16:00 IST; "
+             "thesis-drift Sun 11:00 IST", interval_hours)
 
     if settings.poll_on_startup:
         log.info("Running startup poll...")
@@ -164,6 +253,23 @@ def root(
 def manual_poll(_: str = Depends(auth)) -> JSONResponse:
     """Run a poll cycle on demand (for testing). Returns the cycle result."""
     return JSONResponse(run_poll_cycle())
+
+
+@app.post("/run-news")
+def manual_news(_: str = Depends(auth)) -> JSONResponse:
+    """Run the news monitor on demand. Normally cron-scheduled twice daily."""
+    return JSONResponse(run_news_cycle())
+
+
+@app.post("/run-thesis-drift")
+def manual_thesis_drift(_: str = Depends(auth)) -> JSONResponse:
+    """Run the thesis-drift sentinel on demand. Normally weekly on Sunday.
+
+    Returns counts only — full per-symbol output is on the dashboard.
+    Triggers (if any) flow through analyze_and_alert → email.
+    """
+    out = run_thesis_drift_cycle()
+    return JSONResponse(out)
 
 
 @app.get("/state")

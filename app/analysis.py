@@ -89,27 +89,61 @@ def analyze_and_alert(triggers: list[Trigger], price_map: dict) -> dict[str, Any
     log.info("Calling Claude with %d fresh triggers", len(fresh))
     verdict = _call_claude(user_payload)
 
-    # 4. Email actionable items
-    actionable = verdict.get("actionable_triggers", [])
-    actionable_keys = {(a["symbol"], a["kind"]) for a in actionable}
+    # 4. Identify actionable items from the first pass
+    actionable_first_pass = verdict.get("actionable_triggers", [])
+    actionable_keys_first = {(a["symbol"], a["kind"]) for a in actionable_first_pass}
 
-    if actionable:
+    # 4a. Conviction double-check — independent second pass.
+    #     Takes the first-pass actionables + all available cross-signals
+    #     (ratings, thesis drift, news, macro regime) and scores each one
+    #     0-100. Only items scoring above the threshold proceed to email
+    #     AND get marked as "high conviction" on the dashboard.
+    convictions: dict[tuple[str, str], dict[str, Any]] = {}
+    if actionable_first_pass:
+        convictions = _conviction_double_check(
+            actionable_first_pass, fresh, price_map,
+        )
+
+    threshold = portfolio.settings.conviction_threshold
+    high_conviction = [
+        a for a in actionable_first_pass
+        if convictions.get((a["symbol"], a["kind"]), {}).get("score", 0) >= threshold
+    ]
+    actionable_keys = {(a["symbol"], a["kind"]) for a in high_conviction}
+
+    log.info(
+        "Conviction filter: %d/%d actionable passed (threshold %d)",
+        len(high_conviction), len(actionable_first_pass), threshold,
+    )
+
+    # 5. Email only high-conviction items
+    if high_conviction:
         _send_email(verdict, fresh, actionable_keys)
         # Record alerts so we don't re-send
         for t in fresh:
             if (t.symbol, t.kind.value) in actionable_keys:
                 storage.mark_alert_sent(t.alert_key(), t.to_dict())
 
+    # 6. Persist convictions per (symbol, kind) so the dashboard can show
+    #    BOTH "high" and "suppressed by low conviction" categories.
+    storage.save_conviction_run(
+        actionable_first_pass=actionable_first_pass,
+        convictions=convictions,
+        threshold=threshold,
+    )
+
     storage.log_analysis(
         triggers_in=len(fresh),
-        actionable=len(actionable),
+        actionable=len(high_conviction),
         summary=verdict.get("summary_markdown", ""),
         raw=json.dumps(verdict),
     )
 
     return {
         "triggers_in": len(fresh),
-        "actionable": len(actionable),
+        "actionable_first_pass": len(actionable_first_pass),
+        "actionable": len(high_conviction),
+        "suppressed_low_conviction": len(actionable_first_pass) - len(high_conviction),
         "summary": verdict.get("summary_markdown", ""),
         "overall_severity": verdict.get("overall_severity", "info"),
     }
@@ -237,3 +271,227 @@ def _send_email(verdict: dict, triggers: list[Trigger], actionable_keys: set) ->
         log.info("Email sent: %s", subject)
     except Exception as e:
         log.exception("Failed to send email: %s", e)
+
+
+# ─────────────────────────── macro regime synthesis ───────────────────────
+
+REGIME_SYSTEM_PROMPT = """You are a portfolio-aware macro strategist. You get
+6 macro readings + the investor's portfolio leg exposures. In 2-3 sentences,
+state the current macro regime AND tie it to portfolio-level implications.
+
+Style:
+- Direct. No hedging. No "could/might/may". No "monitor closely".
+- Cite specific numbers. Use the leg names verbatim.
+- Last sentence MUST be portfolio-tied (e.g. "favors X leg over Y", "raises
+  hurdle for Z thesis"), not just macro commentary.
+
+Return PLAIN TEXT only, no markdown headers, no JSON."""
+
+
+def synthesize_macro_regime(
+    macro_snapshot: dict[str, Any],
+    leg_exposure: dict[str, float],
+) -> dict[str, Any] | None:
+    """Run Haiku over the macro snapshot. Persist to storage. Returns
+    {summary, run_ts} or None on hard failure.
+
+    macro_snapshot: {symbol: {name, price, change_24h_pct?, key_levels?}}
+    leg_exposure:   {leg_name: usd_value}
+    """
+    if not macro_snapshot:
+        log.info("Macro regime: no macros available, skipping")
+        return None
+
+    macros_text = "\n".join(
+        f"- {m.get('name', sym)}: {m.get('price', 'n/a')}"
+        + (f" (24h {m['change_24h_pct']:+.1f}%)" if m.get("change_24h_pct") is not None else "")
+        for sym, m in macro_snapshot.items()
+    )
+    legs_text = "\n".join(
+        f"- {leg}: ${v:,.0f}" for leg, v in sorted(leg_exposure.items(), key=lambda kv: -kv[1])
+    ) or "(no leg exposure data)"
+
+    user_msg = f"MACROS:\n{macros_text}\n\nLEG EXPOSURES:\n{legs_text}"
+
+    try:
+        resp = _client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=250,
+            system=REGIME_SYSTEM_PROMPT,
+            messages=[{"role": "user", "content": user_msg}],
+        )
+        raw = resp.content[0].text.strip()
+    except Exception as e:
+        log.warning("Macro regime Haiku call failed: %s", e)
+        return None
+
+    storage.save_macro_regime(
+        summary=raw,
+        snapshot=macro_snapshot,
+        raw=raw,
+    )
+    log.info("Macro regime synthesized (%d chars)", len(raw))
+    return {"summary": raw}
+
+
+# ─────────────────────────── conviction double-check ───────────────────────
+
+CONVICTION_SYSTEM_PROMPT = """You are a noise-filter for a long-term investor's
+alert system. The first pass already decided an item is "actionable". Your job
+is independent: gauge cross-signal CONVICTION on a 0-100 scale.
+
+You receive one actionable trigger plus every available independent signal
+for that symbol:
+  - The trigger itself (price-based event: stop-loss, entry-hit, etc.)
+  - TradingView technical rating (today + 1-week timeframe)
+  - TradingView analyst price-target range (where available)
+  - Latest thesis-drift score (1-5 weekly)
+  - Latest position-level news classification (relevance + contradiction flag)
+  - Current macro regime synthesis (broad context)
+
+For each, decide whether it CONFIRMS or CONTRADICTS the trigger. A stop-loss
+breach with "Strong sell" technicals, thesis-drift score of 2, and contradicting
+news is very high conviction (≥85). A stop-loss breach with "Strong buy"
+technicals, thesis-drift 5, and supportive news suggests beta noise — the
+trigger is real but conviction is low (≤40).
+
+Return ONLY JSON, no preamble. Schema:
+{
+  "score": 0-100,
+  "signals": {
+    "trigger_quality": "strong|moderate|weak",
+    "technical_alignment": "confirms|contradicts|neutral|unavailable",
+    "analyst_alignment": "confirms|contradicts|neutral|unavailable",
+    "thesis_drift_alignment": "confirms|contradicts|neutral|unavailable",
+    "news_alignment": "confirms|contradicts|neutral|unavailable",
+    "macro_alignment": "confirms|contradicts|neutral|unavailable"
+  },
+  "reasoning": "one sentence, max 30 words, citing the strongest signal"
+}
+
+Scoring calibration:
+  90-100: Multiple independent signals all confirm. No contradictions.
+  70-89:  Trigger + ≥2 confirming signals. Minor or no contradictions.
+  50-69:  Mixed. Trigger valid but cross-signals split. Worth watching, not alerting.
+  30-49:  Trigger valid but mostly contradicted by other signals. Likely noise.
+  0-29:   Trigger is technically valid but every other signal says ignore."""
+
+
+def _conviction_double_check(
+    actionable_items: list[dict[str, Any]],
+    triggers: list[Trigger],
+    price_map: dict,
+) -> dict[tuple[str, str], dict[str, Any]]:
+    """One Haiku call per actionable item, scored against all cross-signals.
+
+    Returns {(symbol, kind): {score, signals, reasoning}}.
+    Concurrent execution would help latency but actionable count is usually
+    1-3, so sequential is fine and reads more deterministically in logs.
+    """
+    # Bulk-fetch all signals once (cheap SQL).
+    ratings_map = storage.latest_ratings_for_all()
+    drift_map = storage.latest_thesis_drift_for_all()
+    news_map = storage.latest_news_for_all()
+    macro = storage.latest_macro_regime()
+    trigger_by_key = {(t.symbol, t.kind.value): t for t in triggers}
+
+    out: dict[tuple[str, str], dict[str, Any]] = {}
+    for item in actionable_items:
+        key = (item["symbol"], item["kind"])
+        trigger = trigger_by_key.get(key)
+        if trigger is None:
+            log.warning("Conviction: no trigger for %s — defaulting to score 50", key)
+            out[key] = {"score": 50, "reasoning": "(could not match trigger)", "signals": {}}
+            continue
+
+        live_px = price_map.get(item["symbol"], (None, None))[0]
+        ratings = ratings_map.get(item["symbol"])
+        drift = drift_map.get(item["symbol"])
+        news = news_map.get(item["symbol"])
+
+        # Compose a focused, tabular prompt body. Each section is omitted if
+        # the underlying signal is missing — Claude is told to treat absence
+        # as "unavailable" not as contradiction.
+        sections = [
+            f"TRIGGER: {trigger.kind.value} on {trigger.display_name} — {trigger.detail}",
+            f"FIRST-PASS REASONING: {item.get('reasoning', '')}",
+            f"CURRENT PRICE: {live_px}",
+        ]
+        if ratings:
+            tech_parts = []
+            if ratings.get("technical_today"):
+                tech_parts.append(f"today={ratings['technical_today']}")
+            if ratings.get("technical_1w"):
+                tech_parts.append(f"1w={ratings['technical_1w']}")
+            if tech_parts:
+                sections.append(f"TV TECHNICAL RATING: {', '.join(tech_parts)}")
+            if ratings.get("analyst_target_min") is not None:
+                mn = ratings["analyst_target_min"]
+                mx = ratings["analyst_target_max"]
+                ccy = ratings.get("analyst_target_currency", "")
+                mid = (mn + mx) / 2
+                vs_mid = (live_px - mid) / mid * 100 if live_px else None
+                sections.append(
+                    f"ANALYST PRICE TARGET: {mn:.2f}–{mx:.2f} {ccy} (mid {mid:.2f})"
+                    + (f", current is {vs_mid:+.1f}% from mid" if vs_mid is not None else "")
+                )
+        else:
+            sections.append("TV TECHNICAL RATING: unavailable")
+        if drift:
+            sections.append(f"THESIS-DRIFT SCORE: {drift['score']}/5 — {drift['reasoning']}")
+        else:
+            sections.append("THESIS-DRIFT SCORE: unavailable")
+        if news:
+            tag = "CONTRADICTS thesis" if news.get("contradicts") else "no contradiction"
+            sections.append(
+                f"RECENT NEWS: {news['relevant_count']} relevant headline(s), {tag} — "
+                f"{news.get('summary', '')}"
+            )
+        else:
+            sections.append("RECENT NEWS: unavailable")
+        if macro:
+            sections.append(f"MACRO REGIME: {macro['summary']}")
+        else:
+            sections.append("MACRO REGIME: unavailable")
+
+        user_msg = "\n".join(sections)
+
+        try:
+            resp = _client.messages.create(
+                model="claude-haiku-4-5-20251001",
+                max_tokens=400,
+                system=CONVICTION_SYSTEM_PROMPT,
+                messages=[{"role": "user", "content": user_msg}],
+            )
+            raw = resp.content[0].text.strip()
+        except Exception as e:
+            log.warning("Conviction call failed for %s: %s — defaulting to 50", key, e)
+            out[key] = {"score": 50, "reasoning": "(check failed, default)", "signals": {}}
+            continue
+
+        # Strip fences
+        cleaned = raw
+        if cleaned.startswith("```"):
+            cleaned = cleaned.split("\n", 1)[1].rsplit("```", 1)[0]
+        try:
+            parsed = json.loads(cleaned)
+        except json.JSONDecodeError as e:
+            log.warning("Conviction JSON parse failed for %s: %s — raw: %s",
+                        key, e, raw[:200])
+            out[key] = {"score": 50, "reasoning": "(parse error, default)", "signals": {}}
+            continue
+
+        score = parsed.get("score")
+        if not isinstance(score, (int, float)) or score < 0 or score > 100:
+            log.warning("Bad conviction score for %s: %r", key, score)
+            out[key] = {"score": 50, "reasoning": "(bad score, default)", "signals": {}}
+            continue
+
+        out[key] = {
+            "score": int(round(score)),
+            "signals": parsed.get("signals", {}),
+            "reasoning": str(parsed.get("reasoning", ""))[:300],
+        }
+        log.info("Conviction %d for %s (%s): %s",
+                 out[key]["score"], key, item.get("kind", ""), out[key]["reasoning"])
+    return out

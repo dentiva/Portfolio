@@ -60,13 +60,19 @@ def fetch_prices(retries: int = 2) -> dict[str, tuple[float | None, PriceSource]
     tv_urls = _tv_url_map()
     results: dict[str, tuple[float | None, PriceSource]] = {}
 
-    # 1. TradingView batch
+    # 1. TradingView batch — price + ratings in the same HTTP call per symbol
     if tv_urls:
         log.info("TV fetch: %d symbols", len(tv_urls))
-        tv_out = tradingview.fetch_batch(tv_urls)
-        for sym, (px, _ccy) in tv_out.items():
+        tv_out = tradingview.fetch_batch_with_ratings(tv_urls)
+        ratings_count = 0
+        for sym, ((px, _ccy), ratings) in tv_out.items():
             if px is not None and px > 0:
                 results[sym] = (px, "tradingview")
+            if ratings:
+                storage.save_ratings(sym, ratings)
+                ratings_count += 1
+        if ratings_count:
+            log.info("Ratings extracted for %d symbols", ratings_count)
     tv_hits = len(results)
 
     # 2. Cache fallback for anything TV didn't return (no tv_url,

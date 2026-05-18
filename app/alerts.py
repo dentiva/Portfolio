@@ -34,6 +34,7 @@ class TriggerKind(str, Enum):
     KEY_LEVEL_BREAK_UP = "key_level_break_up"
     KEY_LEVEL_BREAK_DOWN = "key_level_break_down"
     MACRO_MOVE = "macro_move"
+    THESIS_DRIFT = "thesis_drift"   # emitted by thesis.py, not by rule engine
 
 
 @dataclass

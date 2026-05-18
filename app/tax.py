@@ -101,6 +101,43 @@ def current_fy_start_year() -> int:
     return t.year if t.month >= 4 else t.year - 1
 
 
+def most_recent_fy_with_data() -> int | None:
+    """Return the FY start year of the latest Buy/Sell/Dividend in the DB.
+    None if no transactions at all. Used as the dashboard's default FY so
+    the Tax tab opens to actual data instead of an empty current year.
+    """
+    with storage.conn() as c:
+        row = c.execute(
+            "SELECT MAX(date) AS d FROM transactions "
+            "WHERE type IN ('Buy', 'Sell', 'Dividend')"
+        ).fetchone()
+    if not row or not row["d"]:
+        return None
+    # Parse YYYY-MM-DD; FY starts Apr 1
+    y, m = int(row["d"][:4]), int(row["d"][5:7])
+    return y if m >= 4 else y - 1
+
+
+def transaction_count_by_fy() -> dict[int, int]:
+    """Count Buy/Sell/Dividend transactions grouped by FY start year.
+    Returned dict keyed by FY start year. Used to annotate the FY dropdown.
+    """
+    with storage.conn() as c:
+        rows = c.execute(
+            "SELECT date FROM transactions "
+            "WHERE type IN ('Buy', 'Sell', 'Dividend')"
+        ).fetchall()
+    counts: dict[int, int] = {}
+    for r in rows:
+        d = r["date"]
+        if not d or len(d) < 7:
+            continue
+        y, m = int(d[:4]), int(d[5:7])
+        fy = y if m >= 4 else y - 1
+        counts[fy] = counts.get(fy, 0) + 1
+    return counts
+
+
 def fy_label(fy_start_year: int) -> str:
     """'2024-25' style label for an FY starting in fy_start_year."""
     return f"{fy_start_year}-{str(fy_start_year + 1)[2:]}"
