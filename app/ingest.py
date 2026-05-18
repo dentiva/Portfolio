@@ -220,47 +220,64 @@ def parse_file(path: Path) -> list[Transaction]:
 def parse_csv(path: Path) -> list[Transaction]:
     """IBKR Activity Flex Statement CSV.
 
-    IBKR's Flex CSV has section headers and per-section schemas. We look for
-    the 'Trades' section by default. If the CSV is a simpler custom format
-    (one row per transaction with standard column names), we handle that too.
+    Two header-naming conventions in the wild:
+      - Compact / IBKR Flex native: TradeDate, TradePrice, CurrencyPrimary, NetCash
+      - Spaced / generic: "Trade Date", "Trade Price", "Currency", "Net Amount"
+
+    We normalize whitespace and underscores before matching so both work.
+    NetCash from IBKR Flex is in the trade's LOCAL currency, not USD —
+    we convert to USD at parse time using today's FX rates. (Historical
+    per-trade-date FX would be more accurate; today's is a reasonable
+    approximation for portfolio-monitoring purposes and avoids depending
+    on a historical-FX provider. The tax tab applies its own FX field.)
     """
     text = path.read_text(encoding="utf-8-sig", errors="replace")
     rows = list(csv.reader(text.splitlines()))
     if not rows:
         return []
 
+    def _normhdr(s: str) -> str:
+        """Lowercase + strip whitespace, underscores, slashes — so 'TradeDate',
+        'trade date', 'trade_date', and 'trade/date' all become 'tradedate'."""
+        return re.sub(r"[\s_/]+", "", s.strip().lower())
+
     # Heuristic: find header row with date+symbol+quantity+amount columns
     header_idx = None
     for i, row in enumerate(rows[:30]):
-        lower = [c.strip().lower() for c in row]
-        has_date = any("date" in c for c in lower)
-        has_sym = any(c in {"symbol", "ticker"} for c in lower)
-        has_qty = any(c in {"quantity", "qty"} for c in lower)
-        has_amt = any("amount" in c or "proceeds" in c for c in lower)
+        norm = [_normhdr(c) for c in row]
+        has_date = any("date" in c for c in norm)
+        has_sym = any(c in {"symbol", "ticker"} for c in norm)
+        has_qty = any(c in {"quantity", "qty"} for c in norm)
+        has_amt = any("amount" in c or "proceeds" in c or "netcash" in c for c in norm)
         if has_date and has_sym and has_qty and has_amt:
             header_idx = i
             break
     if header_idx is None:
         raise ValueError("Could not locate header row in CSV — check format")
 
-    header = [c.strip().lower() for c in rows[header_idx]]
+    header = [_normhdr(c) for c in rows[header_idx]]
 
     def col(*names: str) -> int | None:
+        """Look up by ANY of the supplied names (also normalized)."""
         for n in names:
-            if n in header:
-                return header.index(n)
+            key = _normhdr(n)
+            if key in header:
+                return header.index(key)
         return None
 
-    c_date = col("date", "trade date", "settle date")
+    c_date = col("date", "tradedate", "settledate", "datetime")
     c_sym = col("symbol", "ticker")
-    c_type = col("buy/sell", "transaction type", "type")
+    c_type = col("buysell", "transactiontype", "type")
     c_qty = col("quantity", "qty")
-    c_price = col("price", "tradeprice", "trade price")
-    c_ccy = col("currency", "price currency")
-    c_gross = col("gross amount", "proceeds")
-    c_comm = col("commission", "ibcommission", "comm/fee")
-    c_net = col("net amount", "netcash", "net cash")
+    c_price = col("price", "tradeprice")
+    c_ccy = col("currency", "currencyprimary", "pricecurrency")
+    c_gross = col("grossamount", "proceeds", "trademoney")
+    c_comm = col("commission", "ibcommission", "commfee")
+    c_net = col("netamount", "netcash")
     c_desc = col("description", "name")
+    # AssetClass filter: IBKR Flex puts internal FX conversions (CASH rows
+    # like "EUR.USD") alongside real equity trades. We only want STK rows.
+    c_assetclass = col("assetclass")
 
     def f(row, idx):
         if idx is None or idx >= len(row):
@@ -281,6 +298,12 @@ def parse_csv(path: Path) -> list[Transaction]:
     for row in rows[header_idx + 1:]:
         if not row or not f(row, c_date):
             continue
+        # Skip non-equity rows (FX conversions are CASH, not STK).
+        # If AssetClass column is absent (older / generic CSVs), we don't filter.
+        if c_assetclass is not None:
+            ac = (f(row, c_assetclass) or "").upper()
+            if ac and ac != "STK":
+                continue
         # Normalize date to YYYY-MM-DD
         d_raw = f(row, c_date) or ""
         d = _normalize_date(d_raw)
@@ -301,7 +324,40 @@ def parse_csv(path: Path) -> list[Transaction]:
             commission_usd=fnum(row, c_comm),
             net_usd=fnum(row, c_net),
         ))
+
+    # FX-normalize: NetCash/Proceeds/Commission from IBKR Flex are in the
+    # trade's LOCAL currency. Convert non-USD rows to USD using today's FX
+    # rates. (Historical per-trade-date rates would be more accurate but
+    # require a separate historical-FX provider; today's rates are a
+    # reasonable approximation for portfolio P&L. For tax filing, the tax
+    # tab applies its own user-supplied FX rate per Rule 115.)
+    _fx_normalize(out)
     return out
+
+
+def _fx_normalize(txns: list[Transaction]) -> None:
+    """In-place: convert net_usd/gross_usd/commission_usd from price_ccy → USD
+    for every non-USD transaction. Single FX fetch per call regardless of row count.
+    """
+    needs_fx = {t.price_ccy for t in txns if t.price_ccy and t.price_ccy != "USD"}
+    if not needs_fx:
+        return
+    # Import locally to avoid a hard dep cycle at module load
+    from . import fx as fx_mod
+    log.info("FX-normalizing %d trade(s) in non-USD currencies: %s",
+             sum(1 for t in txns if t.price_ccy != "USD"), sorted(needs_fx))
+    rates = fx_mod.fetch_fx_rates()
+    for t in txns:
+        if not t.price_ccy or t.price_ccy == "USD":
+            continue
+        rate = rates.get(t.price_ccy)
+        if rate is None:
+            log.error("No FX rate for %s — leaving %s %s as-is (will be wrong)",
+                      t.price_ccy, t.symbol, t.date)
+            continue
+        t.net_usd = t.net_usd * rate
+        t.gross_usd = t.gross_usd * rate
+        t.commission_usd = t.commission_usd * rate
 
 
 # Compiled patterns reused across PDF parsing
@@ -337,6 +393,7 @@ def parse_pdf(path: Path) -> list[Transaction]:
             continue
         seen.add(k)
         deduped.append(t)
+    _fx_normalize(deduped)
     return deduped
 
 
