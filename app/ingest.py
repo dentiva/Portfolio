@@ -481,28 +481,67 @@ def _normalize_date(s: str) -> str | None:
 # ─── Position recomputation ───────────────────────────────
 
 def recompute_positions() -> dict:
-    """Read all Buy/Sell transactions, compute current quantity + avg cost per symbol,
-    and patch portfolio.json in place — preserving user-set thresholds and thesis.
+    """Read all Buy/Sell transactions, compute current quantity + FIFO-remaining
+    avg cost per symbol, and patch portfolio.json in place — preserving
+    user-set thresholds and thesis.
+
+    FIFO note: cost basis is computed over remaining shares only. After a
+    partial sale, the older lots are popped first; only the remaining lots
+    contribute to avg_cost. This matches what tax.py uses for capital-gains
+    matching and produces the "true" cost basis for shares you currently
+    hold (not the lifetime weighted average across shares you've already sold).
     """
+    from collections import deque
+
     with storage.conn() as c:
         rows = c.execute(
             "SELECT symbol, type, quantity, net_usd FROM transactions "
             "WHERE type IN ('Buy', 'Sell') AND symbol != '' "
-            "ORDER BY date ASC"
+            "ORDER BY date ASC, rowid ASC"
         ).fetchall()
 
-    positions: dict[str, dict] = {}
+    # Per-symbol FIFO lot queue. Each lot: {"qty", "cost_per_share"}.
+    # cost_per_share carries commission since net_usd is net of fees — that
+    # matches the tax-cost convention.
+    lots: dict[str, deque] = {}
     for r in rows:
         sym = r["symbol"]
-        qty = r["quantity"] or 0
-        net = r["net_usd"] or 0  # Buy: negative, Sell: positive
-        p = positions.setdefault(sym, {"qty": 0.0, "total_buy_usd": 0.0, "total_buy_qty": 0.0})
+        qty = r["quantity"] or 0          # sells are already negative per the parser
+        net = r["net_usd"] or 0           # buys negative (cash out), sells positive (cash in)
+        if sym not in lots:
+            lots[sym] = deque()
+
         if r["type"] == "Buy":
-            p["qty"] += qty
-            p["total_buy_usd"] += abs(net)
-            p["total_buy_qty"] += qty
-        else:  # Sell
-            p["qty"] += qty  # qty is already negative for sells (per our parser)
+            buy_qty = abs(qty)
+            if buy_qty <= 1e-9:
+                continue
+            cost_per = abs(net) / buy_qty
+            lots[sym].append({"qty": buy_qty, "cost_per_share": cost_per})
+        else:  # Sell — FIFO-pop from oldest lots until matched
+            sell_qty = abs(qty)
+            while sell_qty > 1e-9 and lots[sym]:
+                lot = lots[sym][0]
+                matched = min(sell_qty, lot["qty"])
+                lot["qty"] -= matched
+                sell_qty -= matched
+                if lot["qty"] <= 1e-9:
+                    lots[sym].popleft()
+            # If sell_qty > 0 here, there's a data gap — we silently
+            # zero out the position rather than over-pop. The reconcile
+            # tab surfaces unmatched sells as drift.
+
+    # Reduce each symbol's lot queue to (remaining_qty, weighted_avg_cost)
+    positions: dict[str, dict[str, float]] = {}
+    for sym, queue in lots.items():
+        total_q = sum(l["qty"] for l in queue)
+        if total_q <= 1e-9:
+            positions[sym] = {"qty": 0.0, "avg_cost": 0.0}
+            continue
+        total_basis = sum(l["qty"] * l["cost_per_share"] for l in queue)
+        positions[sym] = {
+            "qty": total_q,
+            "avg_cost": total_basis / total_q,
+        }
 
     # Build new portfolio.json patches
     cfg = json.loads(PORTFOLIO_JSON.read_text())
@@ -513,17 +552,16 @@ def recompute_positions() -> dict:
     # equal to the ticker (user must adjust if it needs .L / .OL / .TO etc).
     ibkr_to_yf = {}
     for h in cfg["holdings"]:
-        # Common case: yf_symbol is ticker + optional suffix
         base = h["yf_symbol"].split(".")[0].split("=")[0].split("^")[0]
         ibkr_to_yf[base] = h["yf_symbol"]
         ibkr_to_yf[h["ticker"]] = h["yf_symbol"]
 
     updates_log: list[str] = []
-    new_holdings: list[dict] = []
+    new_holdings: list[str] = []
 
     for sym, p in positions.items():
         yf_sym = ibkr_to_yf.get(sym, sym)
-        avg_cost = (p["total_buy_usd"] / p["total_buy_qty"]) if p["total_buy_qty"] else 0
+        avg_cost = p["avg_cost"]
         rounded_qty = round(p["qty"], 4)
 
         if yf_sym in existing_by_yf:
@@ -539,7 +577,7 @@ def recompute_positions() -> dict:
             # New ticker — add stub with null thresholds (user must fill)
             new_h = {
                 "ticker": sym,
-                "yf_symbol": sym,  # user MUST update this if it needs an exchange suffix
+                "yf_symbol": sym,
                 "name": f"{sym} (auto-added — please verify yf_symbol)",
                 "leg": "Uncategorized",
                 "quantity": rounded_qty,

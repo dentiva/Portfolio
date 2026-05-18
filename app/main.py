@@ -316,6 +316,25 @@ def run_ingest(_: str = Depends(auth)) -> JSONResponse:
     return JSONResponse(ingest.scan_and_process())
 
 
+@app.post("/recompute")
+def manual_recompute(_: str = Depends(auth)) -> JSONResponse:
+    """Re-derive quantity + avg_cost_usd for every holding from the full
+    transaction ledger using FIFO, then patch portfolio.json in place.
+
+    Use this after a code change that fixes cost-basis math, or any time
+    you suspect the JSON drifted from the ledger. Reads-only against
+    transactions; writes only portfolio.json.
+
+    Reloads in-memory portfolio config after patching, so the next /
+    request sees the new values without restart.
+    """
+    result = ingest.recompute_positions()
+    # Hot-reload portfolio config so the dashboard reflects new values
+    from .config import load_portfolio
+    portfolio.holdings = load_portfolio().holdings
+    return JSONResponse(result)
+
+
 @app.get("/transactions")
 def transactions(limit: int = 50, _: str = Depends(auth)) -> JSONResponse:
     """Return recent transactions from the ingested ledger."""
