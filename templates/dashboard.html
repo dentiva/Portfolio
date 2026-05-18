@@ -62,6 +62,131 @@
   <!-- ====================== HOLDINGS PANEL ====================== -->
   <div data-tab-panel="holdings" class="space-y-6">
 
+  <!-- Macro regime synthesis (Claude-generated, refreshed each poll) -->
+  {% if macro_regime %}
+    <section class="bg-gradient-to-r from-slate-800 to-slate-700 rounded-lg shadow-sm p-5 text-slate-100">
+      <div class="flex items-baseline justify-between mb-2">
+        <h2 class="text-xs uppercase tracking-wider text-slate-300 font-medium">Macro regime</h2>
+        <span class="text-xs text-slate-400">{{ macro_regime.run_ts[:16] | replace('T', ' ') }} UTC</span>
+      </div>
+      <p class="text-sm leading-relaxed text-slate-100">{{ macro_regime.summary }}</p>
+    </section>
+  {% endif %}
+
+  <!-- Conviction-gated alerts: passed the noise filter (≥threshold) -->
+  {% if high_conviction %}
+    <section class="bg-emerald-50 border-l-4 border-emerald-500 rounded p-4">
+      <div class="flex items-baseline justify-between mb-2">
+        <h2 class="text-sm uppercase text-emerald-900 font-semibold">
+          High-conviction alerts ({{ high_conviction|length }})
+        </h2>
+        <span class="text-xs text-emerald-700">conviction ≥ {{ conviction_threshold }}</span>
+      </div>
+      <table class="w-full text-sm">
+        <thead class="text-xs text-emerald-900 uppercase">
+          <tr>
+            <th class="text-left py-1">Symbol</th>
+            <th class="text-left">Trigger</th>
+            <th class="text-right">Score</th>
+            <th class="text-left pl-3">Why</th>
+            <th class="text-left pl-3">When</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for c in high_conviction %}
+            <tr class="border-t border-emerald-200 align-top">
+              <td class="py-1 font-medium">{{ c.symbol }}</td>
+              <td>{{ c.kind | replace('_', ' ') }}</td>
+              <td class="text-right font-semibold">{{ c.score }}/100</td>
+              <td class="pl-3 text-emerald-900">{{ c.reasoning }}</td>
+              <td class="pl-3 text-xs text-emerald-700">{{ c.run_ts[:16] | replace('T', ' ') }}</td>
+            </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </section>
+  {% endif %}
+
+  <!-- Suppressed-by-noise-filter: actionable but below conviction threshold -->
+  {% if suppressed %}
+    <section class="bg-slate-50 rounded p-4 border border-slate-200">
+      <details class="text-sm">
+        <summary class="cursor-pointer text-slate-700 font-medium select-none">
+          <span class="uppercase text-xs tracking-wider">Suppressed by noise filter</span>
+          ·
+          <span class="text-slate-500">{{ suppressed|length }} item(s) below conviction {{ conviction_threshold }}</span>
+        </summary>
+        <table class="w-full text-sm mt-3">
+          <thead class="text-xs text-slate-600 uppercase">
+            <tr>
+              <th class="text-left py-1">Symbol</th>
+              <th class="text-left">Trigger</th>
+              <th class="text-right">Score</th>
+              <th class="text-left pl-3">Why suppressed</th>
+              <th class="text-left pl-3">When</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for c in suppressed %}
+              <tr class="border-t border-slate-200 align-top">
+                <td class="py-1 font-medium text-slate-600">{{ c.symbol }}</td>
+                <td class="text-slate-600">{{ c.kind | replace('_', ' ') }}</td>
+                <td class="text-right text-slate-600">{{ c.score }}/100</td>
+                <td class="pl-3 text-slate-600">{{ c.reasoning }}</td>
+                <td class="pl-3 text-xs text-slate-500">{{ c.run_ts[:16] | replace('T', ' ') }}</td>
+              </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+        <p class="text-xs text-slate-500 mt-2">
+          These items were flagged actionable by the first-pass rules + Claude analyst,
+          but the conviction double-check found weak cross-signal agreement (technical
+          ratings, thesis drift, news, macro regime). Adjust the threshold in
+          portfolio.json &gt; settings &gt; <code>conviction_threshold</code>.
+        </p>
+      </details>
+    </section>
+  {% endif %}
+
+  <!-- Statement reconciliation: only show if there are non-minor drifts -->
+  {% if reconciliation.needs_attention %}
+    <section class="bg-red-50 border-l-4 border-red-400 rounded p-4">
+      <div class="flex items-baseline justify-between mb-2">
+        <h2 class="text-sm uppercase text-red-800 font-semibold">
+          Position drift detected — {{ reconciliation.counts.significant + reconciliation.counts.untracked }} item(s)
+        </h2>
+        <span class="text-xs text-red-700">portfolio.json vs ledger</span>
+      </div>
+      <table class="w-full text-sm mt-2">
+        <thead class="text-xs text-red-900 uppercase">
+          <tr><th class="text-left py-1">Symbol</th><th class="text-right">Configured</th><th class="text-right">Per ledger</th><th class="text-right">Δ</th><th class="text-left pl-3">Severity</th><th class="text-left pl-3">Last txn</th></tr>
+        </thead>
+        <tbody>
+          {% for d in reconciliation.drifts %}
+            {% if d.severity != 'minor' %}
+              <tr class="border-t border-red-200">
+                <td class="py-1 font-medium">{{ d.ticker or d.symbol }}</td>
+                <td class="text-right">{{ "%.4f"|format(d.configured_qty) }}</td>
+                <td class="text-right">{{ "%.4f"|format(d.derived_qty) }}</td>
+                <td class="text-right {{ 'pos' if d.delta > 0 else 'neg' }}">{{ "%+.4f"|format(d.delta) }}</td>
+                <td class="pl-3">
+                  {% if d.severity == 'significant' %}<span class="badge badge-crit">significant</span>
+                  {% elif d.severity == 'untracked' %}<span class="badge badge-warn">untracked</span>
+                  {% else %}<span class="badge badge-info">unconfirmed</span>{% endif %}
+                </td>
+                <td class="pl-3 text-xs text-red-800">{{ d.last_txn_date or '—' }}</td>
+              </tr>
+            {% endif %}
+          {% endfor %}
+        </tbody>
+      </table>
+      <p class="text-xs text-red-700 mt-2">
+        Likely causes: missed IBKR statement upload, corporate action (split/scrip), or portfolio.json out of date.
+        Drop the missing statement into the trades folder and re-run /poll.
+      </p>
+    </section>
+  {% endif %}
+
   <!-- Top-line metrics -->
   <section class="grid grid-cols-2 md:grid-cols-4 gap-4">
     <div class="bg-white rounded-lg shadow-sm p-4">
@@ -71,14 +196,19 @@
     <div class="bg-white rounded-lg shadow-sm p-4">
       <div class="text-xs uppercase text-slate-500 font-medium">Total INR</div>
       <div class="text-xl font-semibold mt-1">
-        {% if total_inr %}₹{{ "{:,.0f}".format(total_inr) }}{% else %}—{% endif %}
+        {% if total_inr %}{{ total_inr | inr }}{% else %}—{% endif %}
       </div>
     </div>
     <div class="bg-white rounded-lg shadow-sm p-4">
-      <div class="text-xs uppercase text-slate-500 font-medium">Gold-oz equivalent</div>
+      <div class="text-xs uppercase text-slate-500 font-medium">Gold equivalent</div>
       <div class="text-xl font-semibold mt-1">
-        {% if total_gold_oz %}{{ "{:,.2f}".format(total_gold_oz) }} oz{% else %}—{% endif %}
+        {% if total_gold_kg %}
+          {{ "{:,.3f}".format(total_gold_kg) }} kg
+        {% else %}—{% endif %}
       </div>
+      {% if total_gold_g and total_gold_kg and total_gold_kg < 1 %}
+        <div class="text-xs text-slate-500 mt-1">{{ "{:,.1f}".format(total_gold_g) }} g</div>
+      {% endif %}
     </div>
     <div class="bg-white rounded-lg shadow-sm p-4">
       <div class="text-xs uppercase text-slate-500 font-medium">Cost Basis</div>
@@ -154,6 +284,9 @@
             <th class="px-3 py-2 text-right">→ Entry</th>
             <th class="px-3 py-2 text-right">→ Stop</th>
             <th class="px-3 py-2 text-right">→ Exit</th>
+            <th class="px-3 py-2 text-center" title="Thesis-drift score (1=broken, 5=intact)">Conviction</th>
+            <th class="px-3 py-2 text-center" title="Thesis-relevant news in last 24h">News</th>
+            <th class="px-3 py-2 text-center" title="TradingView technical rating (today / 1-week)">TV Rating</th>
           </tr>
         </thead>
         <tbody>
@@ -200,6 +333,37 @@
                   {{ r.dist_to_exit_pct | pct }}
                 </span>
               {% else %}—{% endif %}
+            </td>
+            <!-- Conviction (thesis-drift score) -->
+            <td class="px-3 py-2 text-center text-xs">
+              {% if r.drift %}
+                {% set s = r.drift.score %}
+                <span class="badge {% if s <= 2 %}badge-crit{% elif s == 3 %}badge-warn{% else %}badge-info{% endif %}"
+                      title="{{ r.drift.reasoning | e }}">{{ s }}/5</span>
+              {% else %}<span class="text-slate-300">—</span>{% endif %}
+            </td>
+            <!-- News indicator -->
+            <td class="px-3 py-2 text-center text-xs">
+              {% if r.news and r.news.relevant_count > 0 %}
+                <span class="badge {% if r.news.contradicts %}badge-crit{% else %}badge-info{% endif %}"
+                      title="{{ r.news.summary | e }}">
+                  {% if r.news.contradicts %}⚠{% endif %}{{ r.news.relevant_count }}
+                </span>
+              {% else %}<span class="text-slate-300">—</span>{% endif %}
+            </td>
+            <!-- TV Rating: technical + analyst target spread -->
+            <td class="px-3 py-2 text-center text-xs">
+              {% if r.rating %}
+                {% set rt = r.rating.technical_today or r.rating.technical_1w %}
+                {% if rt %}
+                  {% set is_buy = 'buy' in rt %}
+                  {% set is_sell = 'sell' in rt %}
+                  <span class="badge {% if is_buy %}badge-info{% elif is_sell %}badge-crit{% else %}badge-warn{% endif %}"
+                        title="Technical: today={{ r.rating.technical_today or '—' }}, 1w={{ r.rating.technical_1w or '—' }}{% if r.rating.analyst_target_min %} · Analyst target {{ '%.0f'|format(r.rating.analyst_target_min) }}–{{ '%.0f'|format(r.rating.analyst_target_max) }} {{ r.rating.analyst_target_currency }}{% endif %}">
+                    {{ rt | replace('_', ' ') }}
+                  </span>
+                {% else %}<span class="text-slate-300">—</span>{% endif %}
+              {% else %}<span class="text-slate-300">—</span>{% endif %}
             </td>
           </tr>
         {% endfor %}
@@ -361,7 +525,7 @@
           <select name="fy" class="border border-slate-300 rounded px-3 py-2 text-sm">
             {% for y in fy_options %}
               <option value="{{ y }}" {% if y == fy_start_year %}selected{% endif %}>
-                FY {{ y }}-{{ '%02d' % ((y + 1) % 100) }}
+                FY {{ y }}-{{ '%02d' % ((y + 1) % 100) }}{% if fy_tx_counts.get(y, 0) > 0 %} · {{ fy_tx_counts[y] }} txns{% endif %}
               </option>
             {% endfor %}
           </select>
@@ -486,7 +650,17 @@
           </div>
         {% endif %}
       {% else %}
-        <div class="text-sm text-slate-400">No realized sales in this FY.</div>
+        <div class="text-sm text-slate-400">
+          No realized sales in FY {{ fy_label }}.
+          {% if fy_tx_counts %}
+            <span class="text-slate-500">
+              Have data for: {% for y, n in fy_tx_counts.items() | sort %}
+                <a href="?tab=tax&fy={{ y }}&cy={{ y }}{% if fx_rate is not none %}&fx={{ fx_rate }}{% endif %}"
+                   class="text-blue-600 hover:underline">FY {{ y }}-{{ '%02d' % ((y + 1) % 100) }}</a>{% if not loop.last %},{% endif %}
+              {% endfor %}.
+            </span>
+          {% endif %}
+        </div>
       {% endif %}
     </section>
 
