@@ -307,13 +307,22 @@ async def upload_statement(
     if len(content) > 20 * 1024 * 1024:  # 20MB cap
         raise HTTPException(413, "File too large (max 20MB)")
     result = ingest.ingest_uploaded_file(content, file.filename or "uploaded")
+    # Hot-reload portfolio: recompute_positions writes portfolio.json on
+    # disk, but in-memory config from startup is stale otherwise.
+    if result.get("txns_new", 0) > 0:
+        from .config import load_portfolio
+        portfolio.holdings = load_portfolio().holdings
     return JSONResponse(result)
 
 
 @app.post("/ingest")
 def run_ingest(_: str = Depends(auth)) -> JSONResponse:
     """Manually scan the trades/ directory and process any new files."""
-    return JSONResponse(ingest.scan_and_process())
+    result = ingest.scan_and_process()
+    if result.get("txns_new", 0) > 0:
+        from .config import load_portfolio
+        portfolio.holdings = load_portfolio().holdings
+    return JSONResponse(result)
 
 
 @app.post("/recompute")
