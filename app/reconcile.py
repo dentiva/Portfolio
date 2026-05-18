@@ -85,9 +85,38 @@ def _classify(configured: float, derived: float) -> str | None:
 def compute_drifts() -> list[Drift]:
     """Run reconciliation against current config + ledger. Sorted by severity
     descending, then by absolute delta descending.
+
+    IBKR Flex statements record tickers without exchange suffix (REMX, INFR,
+    XEG) while portfolio.json uses the canonical yf_symbol (REMX.L, INFR.L,
+    XEG.TO). We map raw → canonical before comparing so non-US holdings
+    don't appear as duplicate "untracked + unconfirmed" pairs.
     """
-    derived = _derived_positions()
+    derived_raw = _derived_positions()
     configured = {h.yf_symbol: h for h in portfolio.holdings}
+
+    # Build the same raw-ticker → yf_symbol map that recompute_positions uses.
+    # Both the ticker field and the base of yf_symbol (REMX in REMX.L) map to
+    # the canonical yf_symbol.
+    ibkr_to_yf: dict[str, str] = {}
+    for h in portfolio.holdings:
+        base = h.yf_symbol.split(".")[0].split("=")[0].split("^")[0]
+        ibkr_to_yf[base] = h.yf_symbol
+        ibkr_to_yf[h.ticker] = h.yf_symbol
+
+    # Re-key the derived positions onto the canonical yf_symbol. Anything that
+    # doesn't map is left under its raw IBKR ticker so it shows up as
+    # "untracked" (genuinely new ticker — no matching config entry).
+    derived: dict[str, tuple[float, str | None]] = {}
+    for raw_sym, (qty, last_dt) in derived_raw.items():
+        canonical = ibkr_to_yf.get(raw_sym, raw_sym)
+        if canonical in derived:
+            # Two raw tickers mapped to the same canonical — sum quantities,
+            # keep the later last_txn_date
+            prev_q, prev_d = derived[canonical]
+            new_d = max(prev_d, last_dt) if prev_d and last_dt else (last_dt or prev_d)
+            derived[canonical] = (prev_q + qty, new_d)
+        else:
+            derived[canonical] = (qty, last_dt)
 
     all_symbols = set(derived) | set(configured)
     out: list[Drift] = []
