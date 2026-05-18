@@ -20,7 +20,7 @@ from __future__ import annotations
 import logging
 from typing import Literal
 
-from . import storage, tradingview
+from . import fx, storage, tradingview
 from .config import portfolio
 
 log = logging.getLogger(__name__)
@@ -64,15 +64,35 @@ def fetch_prices(retries: int = 2) -> dict[str, tuple[float | None, PriceSource]
     if tv_urls:
         log.info("TV fetch: %d symbols", len(tv_urls))
         tv_out = tradingview.fetch_batch_with_ratings(tv_urls)
+
+        # Fetch FX rates so we can convert non-USD holding prices to USD.
+        # Macros (FX pairs, commodities, indices) are passed through unchanged
+        # — their "price" is by convention already the dashboard value
+        # (USDINR=X is INR-per-USD, ^VIX is a dimensionless index, etc.).
+        fx_rates = fx.fetch_fx_rates()
+        holding_symbols = {h.yf_symbol for h in portfolio.holdings}
+
         ratings_count = 0
-        for sym, ((px, _ccy), ratings) in tv_out.items():
+        converted_count = 0
+        for sym, ((px, ccy), ratings) in tv_out.items():
             if px is not None and px > 0:
-                results[sym] = (px, "tradingview")
+                # Only FX-convert holdings; macros pass through.
+                if sym in holding_symbols and ccy and ccy.upper() != "USD":
+                    usd_px = fx.convert_to_usd(px, ccy, fx_rates)
+                    if usd_px is None:
+                        log.warning("Skipping %s: unknown currency %s", sym, ccy)
+                        continue
+                    results[sym] = (usd_px, "tradingview")
+                    converted_count += 1
+                else:
+                    results[sym] = (px, "tradingview")
             if ratings:
                 storage.save_ratings(sym, ratings)
                 ratings_count += 1
         if ratings_count:
             log.info("Ratings extracted for %d symbols", ratings_count)
+        if converted_count:
+            log.info("FX-converted %d non-USD holding prices to USD", converted_count)
     tv_hits = len(results)
 
     # 2. Cache fallback for anything TV didn't return (no tv_url,
